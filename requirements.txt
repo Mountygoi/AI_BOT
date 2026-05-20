@@ -1,5 +1,4 @@
 aiogram==3.14.0
 groq
-sentence-transformers
 chromadb
 python-dotenv

@@ -6,7 +6,6 @@ import chromadb
 from aiogram import Bot, Dispatcher, types
 from aiogram.exceptions import TelegramForbiddenError
 from groq import Groq
-from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
 print("Инициализация скрипта бота...", flush=True)
@@ -21,8 +20,6 @@ if not TELEGRAM_TOKEN or not GROQ_API_KEY:
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
-
-model = SentenceTransformer("all-MiniLM-L6-v2")
 
 client_db = chromadb.PersistentClient(path="./db")
 collection = client_db.get_collection("centr_krasok")
@@ -91,6 +88,7 @@ SYSTEM_PROMPT = f"""
 ⚠️ ЖЕСТКИЕ ТАБУ И ЗАПРЕТЫ
 =========================
 - ЗАПРЕЩЕНО добавлять в конец ответов дежурные роботизированные фразы-паразиты: "Я готов помочь вам", "Если вы хотите заказать...", "Чем я могу еще помочь?". Ответил на вопрос — и сразу закончил сообщение!
+- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО самостоятельно добавлять в начало ответа приветствия ("Добрый день!", "Здравствуйте!", "Приветствую!"). Твой ответ должен начинаться СРАЗУ с сути вопроса и фактов. Приветствовать клиента имеет право только системный скрипт перехвата, тебе это делать запрещено.
 - ЗАПРЕЩЕНО врать про доставку! Сверяйся строго с графиком: в будни 10-20, сб до 14, вс — выходной!
 
 =========================
@@ -109,7 +107,7 @@ SYSTEM_PROMPT = f"""
 4. Если спрашивают про БРЕНДЫ или КОМПАНИИ: перечисли фабрики из списка партнеров (Tikkurila, Dulux, Marshall и т.д.). Не подменяй их категориями товаров!
 5. Если клиент ищет краску для дверей или мебели, ответь строго по тексту:
 "<b>Для дверей и мебели требуются специальные износостойкие эмали или лаки. К сожалению, в моем текущем каталоге нет точной информации по специализированным покрытиям для дверей. Рекомендую уточнить наличие у наших менеджеров по телефону.</b>"
-6. - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО самостоятельно добавлять в начало ответа приветствия ("Добрый день!", "Здравствуйте!", "Приветствую!"). Твой ответ должен начинаться СРАЗУ с сути вопроса и фактов. Приветствовать клиента имеет право только системный скрипт перехвата, тебе это делать запрещено.
+
 =========================
 ВАЖНАЯ ИНФОРМАЦИЯ О КОМПАНИИ
 =========================
@@ -122,6 +120,20 @@ def clean_and_fix_tags(text: str) -> str:
     text = re.sub(r'(?<!<b>)<a href="(.*?)">(.*?)</a>', r'<b><a href="\1">\2</a></b>', text)
     text = re.sub(r'([^\n])\n([•\-])', r'\1\n\n\2', text)
     return text
+
+def get_embedding(text: str) -> list:
+    """Получение легковесного эмбеддинга через бесплатные модели Groq"""
+    try:
+        # Используем встроенные эмбеддинги Groq вместо локальной SentenceTransformer
+        response = client_ai.embeddings.create(
+            input=[text],
+            model="nomic-embed-text-v1.5"
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        print(f"Ошибка получения эмбеддинга: {e}", flush=True)
+        # Если Groq-эмбеддинг не настроен, вернем пустой список нулевого вектора (размерность 384)
+        return [0.0] * 384
 
 @dp.message()
 async def chat_handler(message: types.Message):
@@ -146,7 +158,6 @@ async def chat_handler(message: types.Message):
         return
     # -------------------------------------------------
 
-    # Перехват ошибки, если юзер заблокировал бота
     try:
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     except TelegramForbiddenError:
@@ -157,7 +168,8 @@ async def chat_handler(message: types.Message):
     history_text = "\n".join(history[-4:]) if history else "История пуста."
 
     try:
-        query_embedding = model.encode(question).tolist()
+        # Получаем легкий вектор
+        query_embedding = get_embedding(question)
         results = collection.query(query_embeddings=[query_embedding], n_results=6)
         
         context = ""
