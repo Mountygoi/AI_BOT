@@ -3,6 +3,8 @@ import os
 import sys
 import re
 import chromadb
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 from aiogram import Bot, Dispatcher, types
 from aiogram.exceptions import TelegramForbiddenError
 from groq import Groq
@@ -25,6 +27,24 @@ client_db = chromadb.PersistentClient(path="./db")
 collection = client_db.get_collection("centr_krasok")
 
 client_ai = Groq(api_key=GROQ_API_KEY)
+
+# --- ФИКШЕН ДЛЯ RENDER WEB SERVICE (ВЕБ-ПОРТ) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        return  # Отключаем спам логов веб-сервера в консоль
+
+def run_health_check():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    print(f"🌍 Фиктивный веб-сервер запущен на порту {port}", flush=True)
+    server.serve_forever()
+# -------------------------------------------------
 
 # Информация о компании
 COMPANY_INFO = """
@@ -122,9 +142,7 @@ def clean_and_fix_tags(text: str) -> str:
     return text
 
 def get_embedding(text: str) -> list:
-    """Получение легковесного эмбеддинга через бесплатные модели Groq"""
     try:
-        # Используем встроенные эмбеддинги Groq вместо локальной SentenceTransformer
         response = client_ai.embeddings.create(
             input=[text],
             model="nomic-embed-text-v1.5"
@@ -132,7 +150,6 @@ def get_embedding(text: str) -> list:
         return response.data[0].embedding
     except Exception as e:
         print(f"Ошибка получения эмбеддинга: {e}", flush=True)
-        # Если Groq-эмбеддинг не настроен, вернем пустой список нулевого вектора (размерность 384)
         return [0.0] * 384
 
 @dp.message()
@@ -168,7 +185,6 @@ async def chat_handler(message: types.Message):
     history_text = "\n".join(history[-4:]) if history else "История пуста."
 
     try:
-        # Получаем легкий вектор
         query_embedding = get_embedding(question)
         results = collection.query(query_embeddings=[query_embedding], n_results=6)
         
@@ -226,6 +242,11 @@ async def main():
     print("=============================================", flush=True)
     print("🚀 БОТ ОБНОВЛЕН! Навязчивый спам ссылками полностью заблокирован.", flush=True)
     print("=============================================", flush=True)
+    
+    # Запускаем фиктивный веб-сервер в отдельном потоке для обхода проверок Render
+    web_thread = threading.Thread(target=run_health_check, daemon=True)
+    web_thread.start()
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
